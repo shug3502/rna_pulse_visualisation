@@ -67,6 +67,68 @@ num_red_decayed = 0
 num_black_decayed = 0
 direction = 'forwards' #start by moving forward in a window of particles to display from the pre-created array.
 
+#check if two line segments intersect, see https://stackoverflow.com/questions/3838329/how-can-i-check-if-two-segments-intersect
+def ccw(A,B,C):
+    return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
+
+# Return true if line segments AB and CD intersect
+def intersect(A,B,C,D):
+    return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
+
+def aux(a):
+    if len(a)>0:
+        return a[0]
+    else:
+        return []
+
+def rotate(x,theta=-np.pi/2):
+    """https://en.wikipedia.org/wiki/Rotation_matrix"""
+    rotation_matrix = np.array([[np.cos(theta), np.sin(-theta)],[np.sin(theta), np.cos(theta)]])
+    if len(x)>0:
+        return np.dot(rotation_matrix,x)
+    else:
+        return []
+
+def get_normal_vector(prev_state,state,cell_path):
+    """find which part of the cell path particles are interacting with and return normal vectors for the$
+        prev_state - array (Nx4) where N is num of particles
+        state - array (Nx4) 
+        cell_path - matplotlib path object for boundary of cell """
+    sx,sy = prev_state.shape
+    if sy!=4 or (sx,sy)!=state.shape:
+        raise ValueError("states should be the same size and consist of positions and velocities")
+    which_boundaries_interacted_with = [np.array([intersect(prev_state[particle,:],state[particle,:],cell_path.vertices[i],cell_path.vertices[i+1]) \
+for i in range(cell_path.vertices.shape[0]-1)]) for particle in range(state.shape[0])]
+    boundary_segments = [aux(np.nonzero(b)[0]) for b in which_boundaries_interacted_with]
+    normal_vectors = [rotate(cell_path.vertices[b]) for b in boundary_segments]
+    return normal_vectors
+
+def reflect(n,v):
+    """ reflection in a line in the plane (or higher dimensions, should still work)
+    n - normal vector
+    v - direction of travel
+    returns new direction of travel
+    see https://en.wikipedia.org/wiki/Reflection_%28mathematics%29#Reflection_across_a_line_in_the_plane
+    """
+    if len(n) > 0:
+        new_direction = v - 2*(np.dot(n,v)*n)
+        return new_direction
+    else:
+        #no reflection needed
+        return v
+
+def reflect_all_particles(prev_state,state,cell_path):
+    """ implement reflection for all the particles """
+    if len(prev_state) + len(prev_state) <=0:
+        print('nothing to reflect')
+        return  None
+    normal_vectors = get_normal_vector(prev_state,state,cell_path)
+    new_velocities = [reflect(normal_vectors[i],(state[i,:2] - prev_state[i,:2])) for i in range(state.shape[0])]
+    new_state = state.copy()
+    print(np.array(new_velocities))
+    new_state[:,2:4] = np.array(new_velocities)
+    return new_state
+
 class ParticleBox:
 
     def __init__(self,
@@ -82,6 +144,7 @@ class ParticleBox:
         self.M = M * np.ones(self.init_state.shape[0])
         self.size = size
         self.state = self.init_state.copy()
+	self.prev_state = self.init_state.copy()
         self.time_elapsed = 0
         self.bounds = bounds
         self.bounds_nucleus = bounds_nucleus
@@ -90,29 +153,23 @@ class ParticleBox:
     def step(self, dt, particle_color, path):
         """step once by dt seconds"""
         self.time_elapsed += dt
+	self.prev_state = self.state.copy() #store previous state to help check for boundary interactions
         # update positions
         if particle_color == 'red':
             self.state[num_red_decayed:num_red, :2] += dt * self.state[num_red_decayed:num_red, 2:]
         else:
+            print('black: ')
+            print([num_black_decayed,num_black])
             self.state[num_black_decayed:num_black, :2] += dt * self.state[num_black_decayed:num_black, 2:]
-
-#        crossed_x1 = (self.state[:, 0] < self.bounds[0] + self.size)
-#        crossed_x2 = (self.state[:, 0] > self.bounds[1] - self.size)
-#        crossed_y1 = (self.state[:, 1] < self.bounds[2] + self.size)
-#        crossed_y2 = (self.state[:, 1] > self.bounds[3] - self.size)
-
-        crossed = [not p for p in path.contains_points(self.state[:,:2])]  
-
-#        self.state[crossed_x1, 0] = self.bounds[0] + self.size
-#        self.state[crossed_x2, 0] = self.bounds[1] - self.size
-#        self.state[crossed_y1, 1] = self.bounds[2] + self.size
-#        self.state[crossed_y2, 1] = self.bounds[3] - self.size
-
-#        self.state[crossed_x1 | crossed_x2, 2] *= -1
-#        self.state[crossed_y1 | crossed_y2, 3] *= -1
-
-        self.state[crossed, 2] *= -1
-        self.state[crossed, 3] *= -1
+        print('original direction: ')
+        print(self.state[50,:2] - self.prev_state[50,:2])
+        crossed = [not p for p in path.contains_points(self.state[:,:2])]
+	if sum(crossed)>0:
+	    r = reflect_all_particles(self.prev_state[crossed,:],self.state[crossed,:],path)
+	    print(r)
+            self.state[crossed, :] = reflect_all_particles(self.prev_state[crossed,:],self.state[crossed,:],path)
+#        self.state[crossed, 2] *= -1
+#        self.state[crossed, 3] *= -1
 
 #------------------------------------------------------------
 im = imageio.imread(im_str)
@@ -139,14 +196,14 @@ if NUCLEUS_LOCATION is None:
 
 # set up initial state
 # create a landscape of 1000,000 red and black particles in the nucleus. Only display and move a subset.
-
+num_particles = 100
 np.random.seed(0)
-init_state = -0.5 + np.random.random((100000, 4)) # was: -0.5
+init_state = -0.5 + np.random.random((num_particles, 4)) # was: -0.5
 init_state[:, :2] = 0.1*init_state[:, :2] + NUCLEUS_LOCATION  # nwas 2*CELL_SIZE - 0.05 the -0.05 keeps particles from spilling over the cell membrane)
 
 box1 = ParticleBox(init_state, size=PARTICLE_SIZE)
 
-init_state = -0.5 + np.random.random((100000, 4))
+init_state = -0.5 + np.random.random((num_particles, 4))
 init_state[:, :2] = 0.1*init_state[:, :2] + NUCLEUS_LOCATION
 
 box2 = ParticleBox(init_state, size=PARTICLE_SIZE)
@@ -162,7 +219,7 @@ particles1, = ax.plot([], [], 'ko', ms=6)
 particles2, = ax.plot([], [], 'ro', ms=6)
 
 cell_path = Path(cell_vertices)
-patch = patches.PathPatch(cell_path, facecolor='orange', lw=2, alpha=0.5)
+patch = patches.PathPatch(cell_path, facecolor=None, lw=2, alpha=0.5)
 ax.add_patch(patch)
 
 # circle is the nucleus in the middle
@@ -176,7 +233,7 @@ if use_rect:
     rect.set_edgecolor('k')
     ax.add_patch(rect)
 else:
-    ax.imshow(np.flipud(np.transpose(im,(1,0,2))),aspect='equal',extent=[-CELL_SIZE, CELL_SIZE, -CELL_SIZE, CELL_SIZE])
+#    ax.imshow(np.flipud(np.transpose(im,(1,0,2))),aspect='equal',extent=[-CELL_SIZE, CELL_SIZE, -CELL_SIZE, CELL_SIZE])
     rect = None
 
 
@@ -201,7 +258,7 @@ def animate(i):
 
 def justblack(): # black balls synthesised and decay equal at equilibrium in first part of the movie
     global box1, box2, rect, dt, ax, fig, totaltime, num_red, num_red_decayed, num_black, num_black_decayed, direction, cell_path
-    if num_black < 100000:
+    if num_black < num_particles:
         num_black = int((SPEED_SYNTHESIS*(totaltime)) + (MAX_PARTICLES-MAX_PARTICLES*np.exp(-totaltime)))
                #move the window displayed along to give impression of synthesis.  black particles grow to equiplib.
         num_black_decayed = int(SPEED_DECAY*(totaltime)) #move the window displayed along to give impression of decay
@@ -215,7 +272,7 @@ def black_and_red(): # black balls at equilib and red balls begining to synthesi
     if num_black_decayed != num_black:  # black particles remain the same number and just decay
             num_black_decayed = int(SPEED_DECAY*(totaltime))  # black particles decay at constant rate
     #4sU is incorporated to make red particles after a delay - black particles have reached equilibrium
-    if num_red < 100000:
+    if num_red < num_particles:
         num_red = int(SPEED_SYNTHESIS*(totaltime-DELAY_BEFORE_RED)) + int(MAX_PARTICLES-MAX_PARTICLES*np.exp(DELAY_BEFORE_RED-totaltime)) # red particles grow to max
         num_red_decayed = int(SPEED_DECAY*(totaltime-DELAY_BEFORE_RED)) # red particles decay at constant rate
     box1.step(dt, 'black', cell_path)
