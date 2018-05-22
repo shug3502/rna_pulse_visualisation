@@ -81,7 +81,7 @@ def aux(a):
     else:
         return []
 
-def rotate(x,theta=-np.pi/2):
+def rotate(x,theta=np.pi/2):
     """https://en.wikipedia.org/wiki/Rotation_matrix"""
     rotation_matrix = np.array([[np.cos(theta), np.sin(-theta)],[np.sin(theta), np.cos(theta)]])
     if len(x)>0:
@@ -100,7 +100,7 @@ def get_normal_vector(prev_state,state,cell_path):
     which_boundaries_interacted_with = [np.array([intersect(prev_state[particle,:],state[particle,:],cell_path.vertices[i],cell_path.vertices[i+1]) \
 for i in range(cell_path.vertices.shape[0]-1)]) for particle in range(state.shape[0])]
     boundary_segments = [aux(np.nonzero(b)[0]) for b in which_boundaries_interacted_with]
-    normal_vectors = [rotate(cell_path.vertices[b]) for b in boundary_segments]
+    normal_vectors = [rotate(cell_path.vertices[b+1]-cell_path.vertices[b]) if not isinstance(b,list) else [] for b in boundary_segments]
     return normal_vectors
 
 def reflect(n,v):
@@ -111,7 +111,7 @@ def reflect(n,v):
     see https://en.wikipedia.org/wiki/Reflection_%28mathematics%29#Reflection_across_a_line_in_the_plane
     """
     if len(n) > 0:
-        new_direction = v - 2*(np.dot(n,v)*n)
+        new_direction = v - 2/np.dot(n,n)*(np.dot(n,v)*n)
         return new_direction
     else:
         #no reflection needed
@@ -123,9 +123,8 @@ def reflect_all_particles(prev_state,state,cell_path):
         print('nothing to reflect')
         return  None
     normal_vectors = get_normal_vector(prev_state,state,cell_path)
-    new_velocities = [reflect(normal_vectors[i],(state[i,:2] - prev_state[i,:2])) for i in range(state.shape[0])]
+    new_velocities = [reflect(normal_vectors[i],state[i,2:]) for i in range(state.shape[0])]
     new_state = state.copy()
-    print(np.array(new_velocities))
     new_state[:,2:4] = np.array(new_velocities)
     return new_state
 
@@ -158,18 +157,16 @@ class ParticleBox:
         if particle_color == 'red':
             self.state[num_red_decayed:num_red, :2] += dt * self.state[num_red_decayed:num_red, 2:]
         else:
-            print('black: ')
-            print([num_black_decayed,num_black])
             self.state[num_black_decayed:num_black, :2] += dt * self.state[num_black_decayed:num_black, 2:]
-        print('original direction: ')
-        print(self.state[50,:2] - self.prev_state[50,:2])
         crossed = [not p for p in path.contains_points(self.state[:,:2])]
+        prev_crossed = [not p for p in path.contains_points(self.prev_state[:,:2])]
 	if sum(crossed)>0:
 	    r = reflect_all_particles(self.prev_state[crossed,:],self.state[crossed,:],path)
-	    print(r)
-            self.state[crossed, :] = reflect_all_particles(self.prev_state[crossed,:],self.state[crossed,:],path)
-#        self.state[crossed, 2] *= -1
-#        self.state[crossed, 3] *= -1
+            self.state[crossed, 2:] = r[:,2:]
+        mistakes = np.array(crossed) & np.array(prev_crossed)
+        self.state[mistakes,2:] = -self.prev_state[mistakes,2:]
+#            self.state[crossed, 2] *= -1
+#            self.state[crossed, 3] *= -1
 
 #------------------------------------------------------------
 im = imageio.imread(im_str)
@@ -196,7 +193,7 @@ if NUCLEUS_LOCATION is None:
 
 # set up initial state
 # create a landscape of 1000,000 red and black particles in the nucleus. Only display and move a subset.
-num_particles = 100
+num_particles = 1000
 np.random.seed(0)
 init_state = -0.5 + np.random.random((num_particles, 4)) # was: -0.5
 init_state[:, :2] = 0.1*init_state[:, :2] + NUCLEUS_LOCATION  # nwas 2*CELL_SIZE - 0.05 the -0.05 keeps particles from spilling over the cell membrane)
